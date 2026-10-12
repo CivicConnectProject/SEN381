@@ -1,0 +1,35 @@
+@model ServiceRequest
+<h1>Request #@Model.RequestId</h1>
+@if (TempData["Error"] is string error)
+{
+    <p class="error">@error</p>
+}
+<dl>
+    <dt>Title</dt><dd>@Model.Title</dd>
+    <dt>Category</dt><dd>@Model.Category</dd>
+    <dt>Description</dt><dd>@Model.Description</dd>
+    <dt>Status</dt><dd>@Model.CurrentStatus</dd>
+    <dt>Assigned Staff ID</dt><dd>@(Model.AssignedStaffId?.ToString() ?? "Not assigned")</dd>
+</dl>
+
+@if (Model.CurrentStatus == RequestStatus.Submitted)
+{
+    <h2>Assign Request</h2>
+    <form asp-action="Assign" method="post">
+        <input type="hidden" name="id" value="@Model.RequestId" />
+        <select name="staffId">
+            <option value="2">Staff Member</option>
+            <option value="3">Administrator</option>
+        </select>
+        <button type="submit">Assign</button>
+    </form>
+}
+else if (Model.CurrentStatus != RequestStatus.Closed)
+{
+    <form asp-action="Advance" method="post">
+        <input type="hidden" name="id" value="@Model.RequestId" />
+        <button type="submit">Advance Status</button>
+    </form>
+}
+
+<p><a asp-action="Index">Back to requests</a></p>

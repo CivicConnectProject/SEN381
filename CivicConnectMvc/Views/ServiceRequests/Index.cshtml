@@ -1,0 +1,18 @@
+@model List<ServiceRequest>
+<h1>Service Requests</h1>
+<a class="button" asp-action="Create">Submit New Request</a>
+<table>
+    <thead><tr><th>ID</th><th>Title</th><th>Category</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    @foreach (var request in Model)
+    {
+        <tr>
+            <td>@request.RequestId</td>
+            <td>@request.Title</td>
+            <td>@request.Category</td>
+            <td>@request.CurrentStatus</td>
+            <td><a asp-action="Details" asp-route-id="@request.RequestId">Details</a></td>
+        </tr>
+    }
+    </tbody>
+</table>

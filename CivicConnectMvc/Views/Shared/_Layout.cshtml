@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CivicConnect</title>
+    <link rel="stylesheet" href="~/css/site.css" />
+</head>
+<body>
+<header>
+    <nav>
+        <a asp-controller="Home" asp-action="Index">CivicConnect</a>
+        <a asp-controller="ServiceRequests" asp-action="Index">Service Requests</a>
+        <a asp-controller="ServiceRequests" asp-action="Create">Submit Request</a>
+    </nav>
+</header>
+<main class="container">
+    @RenderBody()
+</main>
+</body>
+</html>
