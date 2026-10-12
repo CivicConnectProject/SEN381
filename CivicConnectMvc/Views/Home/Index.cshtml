@@ -1,0 +1,21 @@
+@{
+    ViewData["Title"] = "Home";
+}
+<h1>CivicConnect</h1>
+<p>A simple MVC demonstration of service-request management.</p>
+<div class="actions">
+    <a class="button" asp-controller="ServiceRequests" asp-action="Index">View Requests</a>
+    <a class="button" asp-controller="ServiceRequests" asp-action="Create">Submit a Request</a>
+    <a class="button" href="/api/servicerequests">Open REST API</a>
+</div>
+<h2>Project structure</h2>
+<ul>
+    <li><strong>Models</strong> — domain data and business rules</li>
+    <li><strong>Views</strong> — HTML/Razor user interface</li>
+    <li><strong>Controllers</strong> — receive requests and select views</li>
+    <li><strong>Services</strong> — application/business operations and Observer subject</li>
+    <li><strong>Interfaces</strong> — application, repository, Observer and notification contracts</li>
+    <li><strong>Infrastructure</strong> — PostgreSQL repository and Adapter implementation</li>
+    <li><strong>REST API</strong> — JSON endpoints under /api/servicerequests</li>
+    <li><strong>Tests</strong> — business-rule verification</li>
+</ul>
