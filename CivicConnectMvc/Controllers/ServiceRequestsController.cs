@@ -15,19 +15,38 @@ public class ServiceRequestsController : Controller
     public IActionResult Details(int id)
     {
         var request = _requestService.GetById(id);
+        ViewBag.AssignableStaff = _requestService.GetAssignableStaff();
         return request == null ? NotFound() : View(request);
     }
 
     [HttpGet]
-    public IActionResult Create() => View(new ServiceRequestViewModel());
+    public IActionResult Create()
+    {
+        ViewBag.Categories = _requestService.GetCategories();
+        return View(new ServiceRequestViewModel());
+    }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
     public IActionResult Create(ServiceRequestViewModel model)
     {
-        if (!ModelState.IsValid) return View(model);
-        var request = _requestService.Create(model);
-        return RedirectToAction(nameof(Details), new { id = request.RequestId });
+        if (!ModelState.IsValid)
+        {
+            ViewBag.Categories = _requestService.GetCategories();
+            return View(model);
+        }
+
+        try
+        {
+            var request = _requestService.Create(model);
+            return RedirectToAction(nameof(Details), new { id = request.RequestId });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            ModelState.AddModelError(nameof(model.CategoryId), ex.Message);
+            ViewBag.Categories = _requestService.GetCategories();
+            return View(model);
+        }
     }
 
     [HttpPost]

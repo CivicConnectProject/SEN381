@@ -6,6 +6,7 @@ public class Program
     {
         var tests = new (string Name, Action Test)[]
         {
+            (nameof(ServiceRequestTests.Ef_Model_Maps_M2_PostgreSql_Schema), ServiceRequestTests.Ef_Model_Maps_M2_PostgreSql_Schema),
             (nameof(ServiceRequestTests.New_Request_Starts_As_Submitted), ServiceRequestTests.New_Request_Starts_As_Submitted),
             (nameof(ServiceRequestTests.Valid_Status_Transition_Is_Allowed), ServiceRequestTests.Valid_Status_Transition_Is_Allowed),
             (nameof(ServiceRequestTests.Invalid_Status_Transition_Is_Rejected), ServiceRequestTests.Invalid_Status_Transition_Is_Rejected),

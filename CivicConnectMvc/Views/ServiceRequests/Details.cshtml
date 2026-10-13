@@ -6,7 +6,7 @@
 }
 <dl>
     <dt>Title</dt><dd>@Model.Title</dd>
-    <dt>Category</dt><dd>@Model.Category</dd>
+    <dt>Category</dt><dd>@Model.CategoryName</dd>
     <dt>Description</dt><dd>@Model.Description</dd>
     <dt>Status</dt><dd>@Model.CurrentStatus</dd>
     <dt>Assigned Staff ID</dt><dd>@(Model.AssignedStaffId?.ToString() ?? "Not assigned")</dd>
@@ -18,8 +18,10 @@
     <form asp-action="Assign" method="post">
         <input type="hidden" name="id" value="@Model.RequestId" />
         <select name="staffId">
-            <option value="2">Staff Member</option>
-            <option value="3">Administrator</option>
+            @foreach (var staff in ViewBag.AssignableStaff)
+            {
+                <option value="@staff.UserId">@staff.Name</option>
+            }
         </select>
         <button type="submit">Assign</button>
     </form>
