@@ -1,0 +1,37 @@
+
+name: CivicConnect CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, feature/github-actions-ci]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and Verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore CivicConnectMvc.sln
+
+      - name: Build application
+        run: dotnet build CivicConnectMvc.sln --configuration Release --no-restore
+        
+      - name: Static code analysis
+        run: dotnet build CivicConnectMvc.sln --configuration Release --no-incremental -p:RunAnalyzers=true
+
+      - name: Run automated verification
+        run: dotnet run --project CivicConnectMvc.Tests/CivicConnectMvc.Tests.csproj --configuration Release --no-launch-profile --no-restore
