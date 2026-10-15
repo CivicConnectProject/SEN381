@@ -4,10 +4,12 @@ using CivicConnectMvc.Infrastructure.Repositories;
 using CivicConnectMvc.Interfaces;
 using CivicConnectMvc.Services;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllersWithViews();
+builder.Services.AddControllersWithViews()
+    .AddJsonOptions(options => options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles);
 
 var connectionString = builder.Configuration.GetConnectionString("CivicConnectDb");
 //why this is safer for SECRETS SETUP....
@@ -33,12 +35,6 @@ builder.Services.AddScoped<INotificationAdapter, NotificationAdapter>();
 builder.Services.AddScoped<IRequestObserver, RequestNotificationObserver>();
 
 var app = builder.Build();
-
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<CivicConnectDbContext>();
-    DbInitializer.Initialize(db);
-}
 
 if (!app.Environment.IsDevelopment())
 {

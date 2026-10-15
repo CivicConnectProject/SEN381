@@ -8,5 +8,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../CivicConnectMvc/CivicConnectMvc.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.13" />
   </ItemGroup>
 </Project>

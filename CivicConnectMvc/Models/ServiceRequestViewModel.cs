@@ -4,12 +4,16 @@ namespace CivicConnectMvc.Models;
 
 public class ServiceRequestViewModel
 {
-    [Required, StringLength(100)]
+    [Required, StringLength(200)]
     public string Title { get; set; } = "";
 
-    [Required, StringLength(1000)]
+    [Required]
     public string Description { get; set; } = "";
 
-    [Required]
-    public string Category { get; set; } = "Other";
+    /// <summary>
+    /// FK to <c>categories.category_id</c>. Must match a row that exists in the database.
+    /// The Create view submits this as an integer from a select element.
+    /// </summary>
+    [Required, Range(1, int.MaxValue, ErrorMessage = "Please select a category.")]
+    public int CategoryId { get; set; }
 }

@@ -1,22 +1,85 @@
 using CivicConnectMvc.Infrastructure.Notifications;
 using CivicConnectMvc.Interfaces;
 using CivicConnectMvc.Models;
+using CivicConnectMvc.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace CivicConnectMvc.Tests;
 
 public static class ServiceRequestTests
 {
+    public static void Ef_Model_Maps_M2_PostgreSql_Schema()
+    {
+        var options = new DbContextOptionsBuilder<CivicConnectDbContext>()
+            .UseNpgsql(provider => provider.SetPostgresVersion(17, 0))
+            .Options;
+        using var db = new CivicConnectDbContext(options);
+
+        var tables = new (Type EntityType, string TableName)[]
+        {
+            (typeof(User), "users"),
+            (typeof(Category), "categories"),
+            (typeof(ServiceRequest), "service_requests"),
+            (typeof(Assignment), "assignments"),
+            (typeof(StatusHistory), "status_history"),
+            (typeof(RequestAction), "request_actions"),
+            (typeof(Resolution), "resolutions")
+        };
+
+        foreach (var (entityType, tableName) in tables)
+        {
+            var entity = db.Model.FindEntityType(entityType);
+            Check.NotNull(entity);
+            var mappedEntity = entity!;
+            Check.Equal(tableName, mappedEntity.GetTableName() ?? "");
+            Check.Equal("public", mappedEntity.GetSchema() ?? "");
+        }
+
+        var requestType = db.Model.FindEntityType(typeof(ServiceRequest))!;
+        var version = requestType.FindProperty(nameof(ServiceRequest.Version));
+        Check.NotNull(version);
+        Check.Equal(true, version!.IsConcurrencyToken);
+
+        var categoryForeignKey = requestType.GetForeignKeys()
+            .SingleOrDefault(foreignKey => foreignKey.Properties.Any(
+                property => property.Name == nameof(ServiceRequest.CategoryId)));
+        Check.NotNull(categoryForeignKey);
+        Check.Equal(typeof(Category), categoryForeignKey!.PrincipalEntityType.ClrType);
+
+        var resolutionType = db.Model.FindEntityType(typeof(Resolution))!;
+        Check.Equal(true, resolutionType.GetIndexes().Any(index =>
+            index.IsUnique && index.Properties.Any(property => property.Name == nameof(Resolution.RequestId))));
+        Check.Equal(false, db.Model.FindEntityType(typeof(User))!
+            .GetProperties().Any(property => property.Name == nameof(User.IsActive)));
+    }
+
     public static void New_Request_Starts_As_Submitted()
     {
         var request = new ServiceRequest();
-        Check.Equal(RequestStatus.Submitted, request.CurrentStatus);
+        Check.Equal((RequestStatus?)RequestStatus.Submitted, request.CurrentStatus);
     }
 
     public static void Valid_Status_Transition_Is_Allowed()
     {
         var request = new ServiceRequest();
         request.ChangeStatus(RequestStatus.Assigned);
-        Check.Equal(RequestStatus.Assigned, request.CurrentStatus);
+        Check.Equal((RequestStatus?)RequestStatus.Assigned, request.CurrentStatus);
+    }
+
+    public static void Status_Advance_Is_Offered_Only_When_Allowed()
+    {
+        var request = new ServiceRequest();
+        var staff = new User { UserId = 2, Role = UserRole.Staff, IsActive = true };
+
+        Check.Equal(false, request.CanAdvanceStatus());
+        request.AssignTo(staff);
+        Check.Equal(true, request.CanAdvanceStatus());
+        request.ChangeStatus(RequestStatus.InProgress);
+        Check.Equal(true, request.CanAdvanceStatus());
+        request.ChangeStatus(RequestStatus.Resolved);
+        Check.Equal(true, request.CanAdvanceStatus());
+        request.ChangeStatus(RequestStatus.Closed);
+        Check.Equal(false, request.CanAdvanceStatus());
     }
 
     public static void Invalid_Status_Transition_Is_Rejected()
@@ -32,7 +95,7 @@ public static class ServiceRequestTests
 
         request.AssignTo(staff);
 
-        Check.Equal(RequestStatus.Assigned, request.CurrentStatus);
+        Check.Equal((RequestStatus?)RequestStatus.Assigned, request.CurrentStatus);
         Check.Equal(2, request.AssignedStaffId);
     }
 

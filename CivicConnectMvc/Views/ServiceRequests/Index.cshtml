@@ -9,8 +9,8 @@
         <tr>
             <td>@request.RequestId</td>
             <td>@request.Title</td>
-            <td>@request.Category</td>
-            <td>@request.CurrentStatus</td>
+            <td>@request.CategoryName</td>
+            <td>@request.CurrentStatusText</td>
             <td><a asp-action="Details" asp-route-id="@request.RequestId">Details</a></td>
         </tr>
     }

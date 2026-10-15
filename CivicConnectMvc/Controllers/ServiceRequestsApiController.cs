@@ -27,8 +27,15 @@ public class ServiceRequestsApiController : ControllerBase
     public ActionResult<ServiceRequest> Create(ServiceRequestViewModel model)
     {
         if (!ModelState.IsValid) return ValidationProblem(ModelState);
-        var request = _requestService.Create(model);
-        return CreatedAtAction(nameof(GetById), new { id = request.RequestId }, request);
+        try
+        {
+            var request = _requestService.Create(model);
+            return CreatedAtAction(nameof(GetById), new { id = request.RequestId }, request);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpPost("{id:int}/assign/{staffId:int}")]

@@ -17,7 +17,7 @@ public class RequestNotificationObserver : IRequestObserver
         var notification = new NotificationMessage(
             recipient,
             $"CivicConnect request #{request.RequestId} updated",
-            $"{action}. Current status: {request.CurrentStatus}.");
+            $"{action}. Current status: {request.CurrentStatusText}.");
 
         _notificationAdapter.Send(notification);
     }
