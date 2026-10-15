@@ -38,8 +38,8 @@ public class ServiceRequestRepository : IServiceRequestRepository
         _db.Categories.FirstOrDefault(c => c.CategoryId == categoryId);
 
     public List<User> GetAssignableStaff() =>
-        _db.Users.AsNoTracking().Where(u => u.IsActive &&
-            (u.Role == UserRole.Staff || u.Role == UserRole.Administrator)).ToList();
+        _db.Users.AsNoTracking().Where(u =>
+            u.Role == UserRole.Staff || u.Role == UserRole.Administrator).ToList();
 
     public ServiceRequest Add(ServiceRequest request)
     {

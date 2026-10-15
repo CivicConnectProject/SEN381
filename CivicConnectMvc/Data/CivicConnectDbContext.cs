@@ -93,10 +93,11 @@ public class CivicConnectDbContext : DbContext
                   .HasColumnName("description") // text — no max length
                   .IsRequired();
 
-            // CurrentStatus has a private setter — configure backing-field access.
-            entity.Property(r => r.CurrentStatus)
+            entity.Ignore(r => r.CurrentStatus);
+
+            // Persist the raw status text so unknown values remain readable.
+            entity.Property(r => r.CurrentStatusText)
                   .HasColumnName("current_status")
-                  .HasConversion<string>()
                   .HasMaxLength(50)
                   .IsRequired()
                   .UsePropertyAccessMode(PropertyAccessMode.Field);

@@ -15,8 +15,13 @@ public class ServiceRequestsController : Controller
     public IActionResult Details(int id)
     {
         var request = _requestService.GetById(id);
-        ViewBag.AssignableStaff = _requestService.GetAssignableStaff();
-        return request == null ? NotFound() : View(request);
+        if (request == null)
+            return NotFound();
+
+        ViewBag.AssignableStaff = request.CurrentStatus == RequestStatus.Submitted
+            ? (IReadOnlyCollection<User>)_requestService.GetAssignableStaff()
+            : Array.Empty<User>();
+        return View(request);
     }
 
     [HttpGet]

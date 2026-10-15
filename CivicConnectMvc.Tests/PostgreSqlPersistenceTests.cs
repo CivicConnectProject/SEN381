@@ -30,6 +30,8 @@ internal static class PostgreSqlPersistenceTests
         var tests = new (string Name, Action Test)[]
         {
             (nameof(Request_Creation_And_Retrieval_Persist), Request_Creation_And_Retrieval_Persist),
+            (nameof(Unsupported_Persisted_Status_Is_Read_And_Not_Actionable), Unsupported_Persisted_Status_Is_Read_And_Not_Actionable),
+            (nameof(Assignable_Staff_Query_Uses_Persisted_Roles), Assignable_Staff_Query_Uses_Persisted_Roles),
             (nameof(Invalid_Request_Foreign_Keys_Are_Rejected), Invalid_Request_Foreign_Keys_Are_Rejected),
             (nameof(Assignment_Is_Persisted), Assignment_Is_Persisted),
             (nameof(Status_And_History_Save_Atomically), Status_And_History_Save_Atomically),
@@ -75,8 +77,63 @@ internal static class PostgreSqlPersistenceTests
         Assert.Equal(requestId, loaded!.RequestId);
         Assert.Equal(scope.Requester.UserId, loaded.RequesterId);
         Assert.Equal(scope.Category.CategoryId, loaded.CategoryId);
-        Assert.Equal(RequestStatus.Submitted, loaded.CurrentStatus);
+        Assert.Equal((RequestStatus?)RequestStatus.Submitted, loaded.CurrentStatus);
+        Assert.Equal(nameof(RequestStatus.Submitted), loaded.CurrentStatusText);
         Assert.Equal(1, loaded.RequestActions.Count);
+    }
+
+    private static void Unsupported_Persisted_Status_Is_Read_And_Not_Actionable()
+    {
+        using var scope = PostgreSqlTestScope.Begin();
+        var service = scope.CreateService();
+        var cases = new[]
+        {
+            (Request: service.Create(NewRequest(scope.Category), scope.Requester.UserId), Status: "Under Review"),
+            (Request: service.Create(NewRequest(scope.Category), scope.Requester.UserId), Status: "Future Workflow State")
+        };
+
+        foreach (var item in cases)
+        {
+            scope.Db.Database.ExecuteSqlInterpolated(
+                $"UPDATE public.service_requests SET current_status = {item.Status} WHERE request_id = {item.Request.RequestId}");
+        }
+        scope.Db.ChangeTracker.Clear();
+
+        var listed = service.GetAll();
+        foreach (var item in cases)
+        {
+            var listedRequest = listed.Single(request => request.RequestId == item.Request.RequestId);
+            Assert.Equal(null, listedRequest.CurrentStatus);
+            Assert.Equal(item.Status, listedRequest.CurrentStatusText);
+            Assert.Equal(false, listedRequest.CanAdvanceStatus());
+
+            var loaded = service.GetById(item.Request.RequestId);
+            Assert.NotNull(loaded);
+            Assert.Equal(null, loaded!.CurrentStatus);
+            Assert.Equal(item.Status, loaded.CurrentStatusText);
+            Assert.Throws<InvalidOperationException>(
+                () => service.Assign(item.Request.RequestId, scope.Staff.UserId));
+            Assert.Throws<InvalidOperationException>(
+                () => service.MoveToNextStatus(item.Request.RequestId));
+        }
+
+        scope.Db.ChangeTracker.Clear();
+        foreach (var item in cases)
+        {
+            var persisted = service.GetById(item.Request.RequestId);
+            Assert.NotNull(persisted);
+            Assert.Equal(null, persisted!.CurrentStatus);
+            Assert.Equal(item.Status, persisted.CurrentStatusText);
+        }
+    }
+
+    private static void Assignable_Staff_Query_Uses_Persisted_Roles()
+    {
+        using var scope = PostgreSqlTestScope.Begin();
+        var assignableStaff = scope.CreateService().GetAssignableStaff();
+
+        Assert.Equal(true, assignableStaff.Any(user => user.UserId == scope.Staff.UserId));
+        Assert.Equal(false, assignableStaff.Any(user => user.UserId == scope.Requester.UserId));
     }
 
     private static void Invalid_Request_Foreign_Keys_Are_Rejected()
@@ -107,7 +164,8 @@ internal static class PostgreSqlPersistenceTests
 
         var loaded = service.GetById(request.RequestId);
         Assert.NotNull(loaded);
-        Assert.Equal(RequestStatus.Assigned, loaded!.CurrentStatus);
+        Assert.Equal((RequestStatus?)RequestStatus.Assigned, loaded!.CurrentStatus);
+        Assert.Equal(nameof(RequestStatus.Assigned), loaded.CurrentStatusText);
         Assert.Equal(scope.Staff.UserId, loaded.AssignedStaffId);
         Assert.Equal(1, loaded.Assignments.Count);
         Assert.Equal(true, loaded.Assignments.Single().Active);
@@ -147,7 +205,8 @@ internal static class PostgreSqlPersistenceTests
         var after = service.GetById(request.RequestId);
 
         Assert.NotNull(after);
-        Assert.Equal(RequestStatus.Assigned, after!.CurrentStatus);
+        Assert.Equal((RequestStatus?)RequestStatus.Assigned, after!.CurrentStatus);
+        Assert.Equal(nameof(RequestStatus.Assigned), after.CurrentStatusText);
         Assert.Equal(originalVersion, after.Version);
         Assert.Equal(originalHistoryCount, after.StatusHistories.Count);
         Assert.Equal(2, after.RequestActions.Count);
@@ -194,7 +253,8 @@ internal static class PostgreSqlPersistenceTests
         var persisted = firstService.GetById(request.RequestId);
 
         Assert.NotNull(persisted);
-        Assert.Equal(RequestStatus.InProgress, persisted!.CurrentStatus);
+        Assert.Equal((RequestStatus?)RequestStatus.InProgress, persisted!.CurrentStatus);
+        Assert.Equal(nameof(RequestStatus.InProgress), persisted.CurrentStatusText);
         Assert.Equal(originalVersion + 1, persisted.Version);
         Assert.Equal(2, persisted.StatusHistories.Count);
         Assert.Equal(3, persisted.RequestActions.Count);
@@ -212,7 +272,8 @@ internal static class PostgreSqlPersistenceTests
 
         var loaded = service.GetById(request.RequestId);
         Assert.NotNull(loaded);
-        Assert.Equal(RequestStatus.Resolved, loaded!.CurrentStatus);
+        Assert.Equal((RequestStatus?)RequestStatus.Resolved, loaded!.CurrentStatus);
+        Assert.Equal(nameof(RequestStatus.Resolved), loaded.CurrentStatusText);
         Assert.NotNull(loaded.Resolution);
         Assert.Equal(scope.Requester.UserId, loaded.Resolution!.ResolvedBy);
         Assert.Equal(3, loaded.StatusHistories.Count);

@@ -8,7 +8,7 @@
     <dt>Title</dt><dd>@Model.Title</dd>
     <dt>Category</dt><dd>@Model.CategoryName</dd>
     <dt>Description</dt><dd>@Model.Description</dd>
-    <dt>Status</dt><dd>@Model.CurrentStatus</dd>
+    <dt>Status</dt><dd>@Model.CurrentStatusText</dd>
     <dt>Assigned Staff ID</dt><dd>@(Model.AssignedStaffId?.ToString() ?? "Not assigned")</dd>
 </dl>
 
@@ -26,7 +26,7 @@
         <button type="submit">Assign</button>
     </form>
 }
-else if (Model.CurrentStatus != RequestStatus.Closed)
+else if (Model.CanAdvanceStatus())
 {
     <form asp-action="Advance" method="post">
         <input type="hidden" name="id" value="@Model.RequestId" />

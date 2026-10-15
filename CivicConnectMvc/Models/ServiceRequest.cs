@@ -20,7 +20,9 @@ public class ServiceRequest
     // ── Core fields ──────────────────────────────────────────────────────────
     public string Title { get; set; } = "";
     public string Description { get; set; } = "";
-    public RequestStatus CurrentStatus { get; private set; } = RequestStatus.Submitted;
+    public RequestStatus? CurrentStatus =>
+        TryGetKnownStatus(out var status) ? status : null;
+    public string CurrentStatusText { get; private set; } = nameof(RequestStatus.Submitted);
     public DateTime CreatedAt { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified);
     public DateTime UpdatedAt { get; private set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified);
 
@@ -58,15 +60,27 @@ public class ServiceRequest
     public int? AssignedStaffId =>
         Assignments.FirstOrDefault(a => a.Active)?.StaffId;
 
+    public bool CanAdvanceStatus() =>
+        TryGetKnownStatus(out var status) &&
+        status is RequestStatus.Assigned or RequestStatus.InProgress or RequestStatus.Resolved;
+
+    public bool TryGetKnownStatus(out RequestStatus status) =>
+        Enum.TryParse(CurrentStatusText, ignoreCase: false, out status) &&
+        Enum.IsDefined(status);
+
     // ── Domain methods ────────────────────────────────────────────────────────
 
     public void ChangeStatus(RequestStatus newStatus)
     {
-        if (!CanTransition(CurrentStatus, newStatus))
+        if (!TryGetKnownStatus(out var currentStatus))
             throw new InvalidOperationException(
-                $"Cannot change status from {CurrentStatus} to {newStatus}.");
+                $"Cannot change unsupported request status '{CurrentStatusText}'.");
 
-        CurrentStatus = newStatus;
+        if (!CanTransition(currentStatus, newStatus))
+            throw new InvalidOperationException(
+                $"Cannot change status from {currentStatus} to {newStatus}.");
+
+        CurrentStatusText = newStatus.ToString();
         UpdatedAt = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified);
         Version++;
     }
@@ -82,11 +96,11 @@ public class ServiceRequest
             throw new InvalidOperationException(
                 "Only a staff member or administrator can be assigned.");
 
-        if (CurrentStatus != RequestStatus.Submitted)
+        if (CurrentStatusText != nameof(RequestStatus.Submitted))
             throw new InvalidOperationException(
                 "Only submitted requests can be assigned.");
 
-        CurrentStatus = RequestStatus.Assigned;
+        CurrentStatusText = nameof(RequestStatus.Assigned);
         UpdatedAt = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified);
         Version++;
         Assignments.Add(new Assignment
@@ -108,7 +122,11 @@ public class ServiceRequest
             throw new InvalidOperationException(
                 "Only a staff member or administrator can be assigned.");
 
-        if (CurrentStatus is RequestStatus.Resolved or RequestStatus.Closed)
+        if (!TryGetKnownStatus(out var currentStatus))
+            throw new InvalidOperationException(
+                $"Cannot reassign a request with unsupported status '{CurrentStatusText}'.");
+
+        if (currentStatus is RequestStatus.Resolved or RequestStatus.Closed)
             throw new InvalidOperationException(
                 "Resolved or closed requests cannot be reassigned.");
 

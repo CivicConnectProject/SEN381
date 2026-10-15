@@ -56,14 +56,30 @@ public static class ServiceRequestTests
     public static void New_Request_Starts_As_Submitted()
     {
         var request = new ServiceRequest();
-        Check.Equal(RequestStatus.Submitted, request.CurrentStatus);
+        Check.Equal((RequestStatus?)RequestStatus.Submitted, request.CurrentStatus);
     }
 
     public static void Valid_Status_Transition_Is_Allowed()
     {
         var request = new ServiceRequest();
         request.ChangeStatus(RequestStatus.Assigned);
-        Check.Equal(RequestStatus.Assigned, request.CurrentStatus);
+        Check.Equal((RequestStatus?)RequestStatus.Assigned, request.CurrentStatus);
+    }
+
+    public static void Status_Advance_Is_Offered_Only_When_Allowed()
+    {
+        var request = new ServiceRequest();
+        var staff = new User { UserId = 2, Role = UserRole.Staff, IsActive = true };
+
+        Check.Equal(false, request.CanAdvanceStatus());
+        request.AssignTo(staff);
+        Check.Equal(true, request.CanAdvanceStatus());
+        request.ChangeStatus(RequestStatus.InProgress);
+        Check.Equal(true, request.CanAdvanceStatus());
+        request.ChangeStatus(RequestStatus.Resolved);
+        Check.Equal(true, request.CanAdvanceStatus());
+        request.ChangeStatus(RequestStatus.Closed);
+        Check.Equal(false, request.CanAdvanceStatus());
     }
 
     public static void Invalid_Status_Transition_Is_Rejected()
@@ -79,7 +95,7 @@ public static class ServiceRequestTests
 
         request.AssignTo(staff);
 
-        Check.Equal(RequestStatus.Assigned, request.CurrentStatus);
+        Check.Equal((RequestStatus?)RequestStatus.Assigned, request.CurrentStatus);
         Check.Equal(2, request.AssignedStaffId);
     }
 

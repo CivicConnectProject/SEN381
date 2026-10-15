@@ -71,15 +71,15 @@ public class RequestService : IRequestService, IRequestSubject
         var staff = _repository.GetUserById(staffId)
             ?? throw new KeyNotFoundException("Staff member was not found.");
 
-        var previousStatus = request.CurrentStatus;
+        var previousStatus = request.CurrentStatusText;
         request.AssignTo(staff);
         request.StatusHistories.Add(new StatusHistory
         {
             RequestId = request.RequestId,
             Request = request,
             ChangedBy = staffId,
-            PreviousStatus = previousStatus.ToString(),
-            NewStatus = request.CurrentStatus.ToString()
+            PreviousStatus = previousStatus,
+            NewStatus = request.CurrentStatusText
         });
         request.RequestActions.Add(new RequestAction
         {
@@ -95,7 +95,11 @@ public class RequestService : IRequestService, IRequestSubject
     public void MoveToNextStatus(int requestId)
     {
         var request = GetRequiredRequest(requestId);
-        var next = request.CurrentStatus switch
+        if (!request.TryGetKnownStatus(out var currentStatus))
+            throw new InvalidOperationException(
+                $"Cannot advance a request with unsupported status '{request.CurrentStatusText}'.");
+
+        var next = currentStatus switch
         {
             RequestStatus.Assigned => RequestStatus.InProgress,
             RequestStatus.InProgress => RequestStatus.Resolved,
@@ -103,14 +107,14 @@ public class RequestService : IRequestService, IRequestSubject
             _ => throw new InvalidOperationException("The request must be assigned before its work can progress.")
         };
 
-        var previousStatus = request.CurrentStatus;
+        var previousStatus = request.CurrentStatusText;
         request.ChangeStatus(next);
         request.StatusHistories.Add(new StatusHistory
         {
             RequestId = request.RequestId,
             Request = request,
             ChangedBy = request.RequesterId,
-            PreviousStatus = previousStatus.ToString(),
+            PreviousStatus = previousStatus,
             NewStatus = next.ToString()
         });
         request.RequestActions.Add(new RequestAction
