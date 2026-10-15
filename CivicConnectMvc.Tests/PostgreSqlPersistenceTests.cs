@@ -1,5 +1,8 @@
 using System.Data.Common;
+using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text.Json;
 using CivicConnectMvc.Data;
 using CivicConnectMvc.Infrastructure.Repositories;
 using CivicConnectMvc.Interfaces;
@@ -37,7 +40,8 @@ internal static class PostgreSqlPersistenceTests
             (nameof(Status_And_History_Save_Atomically), Status_And_History_Save_Atomically),
             (nameof(Transaction_Rollback_Removes_Test_Data), Transaction_Rollback_Removes_Test_Data),
             (nameof(Optimistic_Concurrency_Rejects_Stale_Write), Optimistic_Concurrency_Rejects_Stale_Write),
-            (nameof(Resolution_Is_Persisted), Resolution_Is_Persisted)
+            (nameof(Resolution_Is_Persisted), Resolution_Is_Persisted),
+            (nameof(Http_Create_And_Get_Persists_Request), Http_Create_And_Get_Persists_Request)
         };
 
         var passed = 0;
@@ -279,6 +283,79 @@ internal static class PostgreSqlPersistenceTests
         Assert.Equal(3, loaded.StatusHistories.Count);
     }
 
+    private static void Http_Create_And_Get_Persists_Request()
+    {
+        using var fixture = DatabaseBackedApiTestFixture.Create();
+        var prerequisites = fixture.SeedCreateRequestPrerequisites();
+        var title = $"HTTP integration request {Guid.NewGuid():N}";
+        var description = $"Created and retrieved through HTTP ({Guid.NewGuid():N}).";
+
+        using var categoryContext = fixture.CreateEnlistedContext();
+        var categoryName = categoryContext.Categories
+            .Where(category => category.CategoryId == prerequisites.CategoryId)
+            .Select(category => category.Name)
+            .Single();
+
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/servicerequests")
+        {
+            Content = JsonContent.Create(new
+            {
+                title,
+                description,
+                categoryId = prerequisites.CategoryId
+            })
+        };
+        using var createResponse = fixture.Send(createRequest);
+
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        Assert.NotNull(createResponse.Headers.Location);
+
+        using var createdDocument = JsonDocument.Parse(
+            createResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var createdRoot = createdDocument.RootElement;
+        var requestId = createdRoot.GetProperty("requestId").GetInt32();
+        Assert.Equal(title, createdRoot.GetProperty("title").GetString());
+        Assert.Equal(description, createdRoot.GetProperty("description").GetString());
+        Assert.Equal(prerequisites.CategoryId, createdRoot.GetProperty("categoryId").GetInt32());
+        Assert.Equal(nameof(RequestStatus.Submitted), createdRoot.GetProperty("currentStatusText").GetString());
+
+        var location = createResponse.Headers.Location!;
+        var locationPath = location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
+        Assert.Equal($"/api/servicerequests/{requestId}", locationPath);
+
+        using var getRequest = new HttpRequestMessage(HttpMethod.Get, location);
+        using var getResponse = fixture.Send(getRequest);
+        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+
+        using var retrievedDocument = JsonDocument.Parse(
+            getResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var retrievedRoot = retrievedDocument.RootElement;
+        Assert.Equal(requestId, retrievedRoot.GetProperty("requestId").GetInt32());
+        Assert.Equal(title, retrievedRoot.GetProperty("title").GetString());
+        Assert.Equal(description, retrievedRoot.GetProperty("description").GetString());
+        Assert.Equal(prerequisites.CategoryId, retrievedRoot.GetProperty("categoryId").GetInt32());
+        Assert.Equal(categoryName, retrievedRoot.GetProperty("category").GetProperty("name").GetString());
+        Assert.Equal(nameof(RequestStatus.Submitted), retrievedRoot.GetProperty("currentStatusText").GetString());
+
+        using var verificationContext = fixture.CreateEnlistedContext();
+        var persisted = verificationContext.ServiceRequests
+            .AsNoTracking()
+            .Include(request => request.Category)
+            .Include(request => request.RequestActions)
+            .SingleOrDefault(request => request.RequestId == requestId);
+
+        Assert.NotNull(persisted);
+        Assert.Equal(title, persisted!.Title);
+        Assert.Equal(description, persisted.Description);
+        Assert.Equal(prerequisites.CategoryId, persisted.CategoryId);
+        Assert.Equal(categoryName, persisted.Category!.Name);
+        Assert.Equal(nameof(RequestStatus.Submitted), persisted.CurrentStatusText);
+        Assert.Equal(1, persisted.RequestActions.Count);
+        var initialAction = persisted.RequestActions.Single();
+        Assert.Equal(prerequisites.RequesterId, initialAction.UserId);
+        Assert.Equal("Service request submitted", initialAction.Details);
+    }
+
     internal static RequestService CreateService(CivicConnectDbContext db) =>
         new(new ServiceRequestRepository(db), Array.Empty<IRequestObserver>());
 
@@ -341,16 +418,13 @@ internal static class PostgreSqlPersistenceTests
 
 internal sealed class PostgreSqlTestScope : IDisposable
 {
-    private const string ExpectedDatabase = "civicconnect_m3_test";
     private readonly NpgsqlConnection _connection;
     private readonly DbContextOptions<CivicConnectDbContext> _options;
     private IDbContextTransaction? _transaction;
 
     private PostgreSqlTestScope(string connectionString, DbCommandInterceptor? interceptor)
     {
-        var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!string.Equals(builder.Database, ExpectedDatabase, StringComparison.Ordinal))
-            throw new InvalidOperationException("The integration-test connection must target civicconnect_m3_test.");
+        var builder = PostgreSqlTestConnectionConfiguration.Validate(connectionString);
 
         _connection = new NpgsqlConnection(builder.ConnectionString);
         var optionsBuilder = new DbContextOptionsBuilder<CivicConnectDbContext>()
@@ -374,9 +448,7 @@ internal sealed class PostgreSqlTestScope : IDisposable
         if (string.IsNullOrWhiteSpace(connectionString))
             throw new InvalidOperationException("CIVCONNECT_TEST_CONNECTION_STRING is not set.");
 
-        var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!string.Equals(builder.Database, ExpectedDatabase, StringComparison.Ordinal))
-            throw new InvalidOperationException("The integration-test connection must target civicconnect_m3_test.");
+        _ = PostgreSqlTestConnectionConfiguration.Validate(connectionString);
     }
 
     public static PostgreSqlTestScope Begin(DbCommandInterceptor? interceptor = null)
