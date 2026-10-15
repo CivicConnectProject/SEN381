@@ -41,7 +41,9 @@ internal static class PostgreSqlPersistenceTests
             (nameof(Transaction_Rollback_Removes_Test_Data), Transaction_Rollback_Removes_Test_Data),
             (nameof(Optimistic_Concurrency_Rejects_Stale_Write), Optimistic_Concurrency_Rejects_Stale_Write),
             (nameof(Resolution_Is_Persisted), Resolution_Is_Persisted),
-            (nameof(Http_Create_And_Get_Persists_Request), Http_Create_And_Get_Persists_Request)
+            (nameof(Http_Create_And_Get_Persists_Request), Http_Create_And_Get_Persists_Request),
+            (nameof(Http_Assign_Persists_Assignment_And_Audit), Http_Assign_Persists_Assignment_And_Audit),
+            (nameof(Http_Advance_Workflow_Persists_History_And_Resolution), Http_Advance_Workflow_Persists_History_And_Resolution)
         };
 
         var passed = 0;
@@ -354,6 +356,203 @@ internal static class PostgreSqlPersistenceTests
         var initialAction = persisted.RequestActions.Single();
         Assert.Equal(prerequisites.RequesterId, initialAction.UserId);
         Assert.Equal("Service request submitted", initialAction.Details);
+    }
+
+    private static void Http_Assign_Persists_Assignment_And_Audit()
+    {
+        using var fixture = DatabaseBackedApiTestFixture.Create();
+        var prerequisites = fixture.SeedCreateRequestPrerequisites();
+        var staff = fixture.SeedStaffUser();
+
+        var title = $"HTTP assignment request {Guid.NewGuid():N}";
+        var description = $"Created for assignment through HTTP ({Guid.NewGuid():N}).";
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/servicerequests")
+        {
+            Content = JsonContent.Create(new
+            {
+                title,
+                description,
+                categoryId = prerequisites.CategoryId
+            })
+        };
+        using var createResponse = fixture.Send(createRequest);
+
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        using var createdDocument = JsonDocument.Parse(
+            createResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var requestId = createdDocument.RootElement.GetProperty("requestId").GetInt32();
+
+        using var assignRequest = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/servicerequests/{requestId}/assign/{staff.UserId}");
+        using var assignResponse = fixture.Send(assignRequest);
+        Assert.Equal(HttpStatusCode.NoContent, assignResponse.StatusCode);
+
+        using var verificationContext = fixture.CreateEnlistedContext();
+        var persisted = verificationContext.ServiceRequests
+            .AsNoTracking()
+            .Include(request => request.Assignments)
+            .Include(request => request.StatusHistories)
+            .Include(request => request.RequestActions)
+            .SingleOrDefault(request => request.RequestId == requestId);
+
+        Assert.NotNull(persisted);
+        Assert.Equal(nameof(RequestStatus.Assigned), persisted!.CurrentStatusText);
+        Assert.Equal(2, persisted.Version);
+
+        var activeAssignments = persisted.Assignments
+            .Where(assignment => assignment.Active)
+            .ToList();
+        Assert.Equal(1, activeAssignments.Count);
+        Assert.Equal(staff.UserId, activeAssignments.Single().StaffId);
+        Assert.Equal(requestId, activeAssignments.Single().RequestId);
+
+        var assignmentHistory = persisted.StatusHistories
+            .Single(history =>
+                history.PreviousStatus == nameof(RequestStatus.Submitted) &&
+                history.NewStatus == nameof(RequestStatus.Assigned));
+        Assert.Equal(staff.UserId, assignmentHistory.ChangedBy);
+
+        var assignmentAction = persisted.RequestActions
+            .Single(action => action.Details == $"Request assigned to {staff.Name}");
+        Assert.Equal(staff.UserId, assignmentAction.UserId);
+        Assert.Equal(requestId, assignmentAction.RequestId);
+    }
+
+    private static void Http_Advance_Workflow_Persists_History_And_Resolution()
+    {
+        using var fixture = DatabaseBackedApiTestFixture.Create();
+        var prerequisites = fixture.SeedCreateRequestPrerequisites();
+        var staff = fixture.SeedStaffUser();
+
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/servicerequests")
+        {
+            Content = JsonContent.Create(new
+            {
+                title = $"HTTP workflow request {Guid.NewGuid():N}",
+                description = $"Created for HTTP status workflow ({Guid.NewGuid():N}).",
+                categoryId = prerequisites.CategoryId
+            })
+        };
+        using var createResponse = fixture.Send(createRequest);
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+
+        using var createdDocument = JsonDocument.Parse(
+            createResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var requestId = createdDocument.RootElement.GetProperty("requestId").GetInt32();
+
+        using (var assignRequest = new HttpRequestMessage(
+                   HttpMethod.Post,
+                   $"/api/servicerequests/{requestId}/assign/{staff.UserId}"))
+        using (var assignResponse = fixture.Send(assignRequest))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, assignResponse.StatusCode);
+        }
+        AssertWorkflowState(fixture, requestId, nameof(RequestStatus.Assigned), expectedVersion: 2, expectedResolutionCount: 0);
+
+        var transitions = new[]
+        {
+            (Previous: RequestStatus.Assigned, Next: RequestStatus.InProgress, Version: 3, ResolutionCount: 0),
+            (Previous: RequestStatus.InProgress, Next: RequestStatus.Resolved, Version: 4, ResolutionCount: 1),
+            (Previous: RequestStatus.Resolved, Next: RequestStatus.Closed, Version: 5, ResolutionCount: 1)
+        };
+
+        foreach (var transition in transitions)
+        {
+            using var advanceRequest = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/servicerequests/{requestId}/advance");
+            using var advanceResponse = fixture.Send(advanceRequest);
+            Assert.Equal(HttpStatusCode.NoContent, advanceResponse.StatusCode);
+
+            AssertWorkflowState(
+                fixture,
+                requestId,
+                transition.Next.ToString(),
+                transition.Version,
+                transition.ResolutionCount);
+        }
+
+        using var verificationContext = fixture.CreateEnlistedContext();
+        var persisted = verificationContext.ServiceRequests
+            .AsNoTracking()
+            .Include(request => request.Assignments)
+            .Include(request => request.StatusHistories)
+            .Include(request => request.RequestActions)
+            .Include(request => request.Resolution)
+            .SingleOrDefault(request => request.RequestId == requestId);
+
+        Assert.NotNull(persisted);
+        Assert.Equal(nameof(RequestStatus.Closed), persisted!.CurrentStatusText);
+        Assert.Equal(5, persisted.Version);
+
+        var activeAssignments = persisted.Assignments
+            .Where(assignment => assignment.Active)
+            .ToList();
+        Assert.Equal(1, activeAssignments.Count);
+        Assert.Equal(staff.UserId, activeAssignments.Single().StaffId);
+
+        var expectedHistory = new[]
+        {
+            (Previous: nameof(RequestStatus.Submitted), Next: nameof(RequestStatus.Assigned), ActorId: staff.UserId),
+            (Previous: nameof(RequestStatus.Assigned), Next: nameof(RequestStatus.InProgress), ActorId: prerequisites.RequesterId),
+            (Previous: nameof(RequestStatus.InProgress), Next: nameof(RequestStatus.Resolved), ActorId: prerequisites.RequesterId),
+            (Previous: nameof(RequestStatus.Resolved), Next: nameof(RequestStatus.Closed), ActorId: prerequisites.RequesterId)
+        };
+        var actualHistory = persisted.StatusHistories
+            .OrderBy(history => history.StatusHistoryId)
+            .Select(history => (history.PreviousStatus, history.NewStatus, history.ChangedBy))
+            .ToList();
+        Assert.Equal(4, actualHistory.Count);
+        for (var index = 0; index < expectedHistory.Length; index++)
+        {
+            Assert.Equal(expectedHistory[index].Previous, actualHistory[index].PreviousStatus);
+            Assert.Equal(expectedHistory[index].Next, actualHistory[index].NewStatus);
+            Assert.Equal(expectedHistory[index].ActorId, actualHistory[index].ChangedBy);
+        }
+
+        var expectedActions = new[]
+        {
+            (Details: "Service request submitted", ActorId: prerequisites.RequesterId),
+            (Details: $"Request assigned to {staff.Name}", ActorId: staff.UserId),
+            (Details: $"Request status changed to {nameof(RequestStatus.InProgress)}", ActorId: prerequisites.RequesterId),
+            (Details: $"Request status changed to {nameof(RequestStatus.Resolved)}", ActorId: prerequisites.RequesterId),
+            (Details: $"Request status changed to {nameof(RequestStatus.Closed)}", ActorId: prerequisites.RequesterId)
+        };
+        var actualActions = persisted.RequestActions
+            .OrderBy(action => action.ActionId)
+            .Select(action => (action.Details, action.UserId))
+            .ToList();
+        Assert.Equal(expectedActions.Length, actualActions.Count);
+        for (var index = 0; index < expectedActions.Length; index++)
+        {
+            Assert.Equal(expectedActions[index].Details, actualActions[index].Details);
+            Assert.Equal(expectedActions[index].ActorId, actualActions[index].UserId);
+        }
+
+        Assert.NotNull(persisted.Resolution);
+        Assert.Equal(1, verificationContext.Resolutions.Count(resolution => resolution.RequestId == requestId));
+        Assert.Equal(prerequisites.RequesterId, persisted.Resolution!.ResolvedBy);
+        Assert.Equal("Request marked as resolved", persisted.Resolution.Details);
+    }
+
+    private static void AssertWorkflowState(
+        DatabaseBackedApiTestFixture fixture,
+        int requestId,
+        string expectedStatus,
+        int expectedVersion,
+        int expectedResolutionCount)
+    {
+        using var context = fixture.CreateEnlistedContext();
+        var request = context.ServiceRequests
+            .AsNoTracking()
+            .SingleOrDefault(item => item.RequestId == requestId);
+        Assert.NotNull(request);
+        Assert.Equal(expectedStatus, request!.CurrentStatusText);
+        Assert.Equal(expectedVersion, request.Version);
+        Assert.Equal(
+            expectedResolutionCount,
+            context.Resolutions.Count(resolution => resolution.RequestId == requestId));
     }
 
     internal static RequestService CreateService(CivicConnectDbContext db) =>

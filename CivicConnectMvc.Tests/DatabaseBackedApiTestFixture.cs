@@ -139,6 +139,27 @@ internal sealed class DatabaseBackedApiTestFixture : IDisposable
         return (_createRequestPrerequisites.RequesterId, _createRequestPrerequisites.CategoryId);
     }
 
+    public User SeedStaffUser()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        var database = _database
+            ?? throw new InvalidOperationException("The fixture database context is unavailable.");
+        if (_transaction is null)
+            throw new InvalidOperationException("The fixture transaction is unavailable.");
+
+        var suffix = Guid.NewGuid().ToString("N");
+        var staff = new User
+        {
+            Name = $"HTTP test staff {suffix}",
+            Email = $"http-staff-{suffix}@example.test",
+            Role = UserRole.Staff
+        };
+        database.Users.Add(staff);
+        database.SaveChanges();
+        return staff;
+    }
+
     public CivicConnectDbContext CreateEnlistedContext()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
