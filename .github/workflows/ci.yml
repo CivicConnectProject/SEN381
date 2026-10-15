@@ -29,6 +29,9 @@ jobs:
 
       - name: Build application
         run: dotnet build CivicConnectMvc.sln --configuration Release --no-restore
+        
+      - name: Static code analysis
+        run: dotnet build CivicConnectMvc.sln --configuration Release --no-incremental -p:RunAnalyzers=true
 
       - name: Run automated verification
         run: dotnet run --project CivicConnectMvc.Tests/CivicConnectMvc.Tests.csproj --configuration Release --no-launch-profile --no-restore
