@@ -64,11 +64,11 @@ The database does not automatically require a REST API. They are separate archit
 
 ## PostgreSQL setup
 
-1. Install PostgreSQL and create a database named `CivicConnectDb`.
-2. Configure the development connection string using .NET User Secrets. Do not store real passwords in appsettings.json or commit them to source control.
-3. Ensure PostgreSQL is running and the connection string matches your local database configuration.
-4. Run the application using the .NET CLI or Visual Studio.
-5. The application uses EF Core EnsureCreated() to create the schema for this demonstration and seeds sample users and a service request when the relevant tables are empty
+1. Install PostgreSQL 17 and create a new, empty database for CivicConnect.
+2. Provision its schema by executing [`CivicConnectMvc/Database/DatabaseSchema.sql`](CivicConnectMvc/Database/DatabaseSchema.sql) against that newly created, empty database only. The script creates the seven-table public schema structure; it does not contain application users or seed data.
+3. Configure your own development database connection using .NET User Secrets. Do not put credentials in `appsettings.json` or commit them to source control.
+4. Ensure PostgreSQL is running and the secret points to the database you provisioned.
+5. Run the application using the .NET CLI or Visual Studio. The application does not run `EnsureCreated()`, migrations, or automatic sample-data seeding; schema provisioning is a separate setup step.
 
 
 No real database credentials or external notification API keys are included in this project.

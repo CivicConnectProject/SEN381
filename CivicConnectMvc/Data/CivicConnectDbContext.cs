@@ -6,7 +6,7 @@ namespace CivicConnectMvc.Data;
 /// <summary>
 /// EF Core DbContext for the CivicConnect application.
 /// All mappings are derived directly from the authoritative M2 schema in
-/// <c>civicconnect_dev_schema.sql</c> (PostgreSQL snake_case, public schema).
+/// <c>CivicConnectMvc/Database/DatabaseSchema.sql</c> (PostgreSQL snake_case, public schema).
 /// No EnsureCreated / Migrate is called here — schema management is the DBA's responsibility.
 /// </summary>
 public class CivicConnectDbContext : DbContext
