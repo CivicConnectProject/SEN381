@@ -41,6 +41,7 @@ internal static class PostgreSqlPersistenceTests
             (nameof(Transaction_Rollback_Removes_Test_Data), Transaction_Rollback_Removes_Test_Data),
             (nameof(Optimistic_Concurrency_Rejects_Stale_Write), Optimistic_Concurrency_Rejects_Stale_Write),
             (nameof(Resolution_Is_Persisted), Resolution_Is_Persisted),
+            (nameof(Http_Create_With_Unknown_Category_Returns_BadRequest_Without_Persisting), Http_Create_With_Unknown_Category_Returns_BadRequest_Without_Persisting),
             (nameof(Http_Create_And_Get_Persists_Request), Http_Create_And_Get_Persists_Request),
             (nameof(Http_Assign_Persists_Assignment_And_Audit), Http_Assign_Persists_Assignment_And_Audit),
             (nameof(Http_Advance_Workflow_Persists_History_And_Resolution), Http_Advance_Workflow_Persists_History_And_Resolution)
@@ -67,6 +68,49 @@ internal static class PostgreSqlPersistenceTests
         Console.WriteLine();
         Console.WriteLine($"{passed}/{tests.Length} PostgreSQL integration tests passed.");
         return passed == tests.Length ? 0 : 1;
+    }
+
+    private static void Http_Create_With_Unknown_Category_Returns_BadRequest_Without_Persisting()
+    {
+        using var fixture = DatabaseBackedApiTestFixture.Create();
+        fixture.SeedCreateRequestPrerequisites();
+
+        using var verificationContext = fixture.CreateEnlistedContext();
+        var missingCategoryId = FindUnusedId(
+            verificationContext.Categories
+                .AsNoTracking()
+                .Select(category => category.CategoryId)
+                .ToHashSet());
+        var relatedRecordCountsBefore = (
+            Requests: verificationContext.ServiceRequests.Count(),
+            Assignments: verificationContext.Assignments.Count(),
+            StatusHistories: verificationContext.StatusHistories.Count(),
+            RequestActions: verificationContext.RequestActions.Count(),
+            Resolutions: verificationContext.Resolutions.Count());
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/servicerequests")
+        {
+            Content = JsonContent.Create(new
+            {
+                title = "Request with an unknown category",
+                description = "This valid request references a category that does not exist.",
+                categoryId = missingCategoryId
+            })
+        };
+        using var response = fixture.Send(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var errorDocument = JsonDocument.Parse(
+            response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        Assert.Equal("Category was not found.", errorDocument.RootElement.GetProperty("error").GetString());
+
+        var relatedRecordCountsAfter = (
+            Requests: verificationContext.ServiceRequests.Count(),
+            Assignments: verificationContext.Assignments.Count(),
+            StatusHistories: verificationContext.StatusHistories.Count(),
+            RequestActions: verificationContext.RequestActions.Count(),
+            Resolutions: verificationContext.Resolutions.Count());
+        Assert.Equal(relatedRecordCountsBefore, relatedRecordCountsAfter);
     }
 
     private static void Request_Creation_And_Retrieval_Persist()
