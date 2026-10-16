@@ -7,9 +7,12 @@ public class Program
         if (args.Length == 1 && args[0] == "--postgres")
             return PostgreSqlPersistenceTests.RunAll();
 
+        if (args.Length == 1 && args[0] == "--system")
+            return SystemHttpTests.RunAll();
+
         if (args.Length != 0)
         {
-            Console.Error.WriteLine("Usage: CivicConnectMvc.Tests [--postgres]");
+            Console.Error.WriteLine("Usage: CivicConnectMvc.Tests [--postgres|--system]");
             return 2;
         }
 
