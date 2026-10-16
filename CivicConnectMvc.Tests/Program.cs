@@ -7,14 +7,18 @@ public class Program
         if (args.Length == 1 && args[0] == "--postgres")
             return PostgreSqlPersistenceTests.RunAll();
 
+        if (args.Length == 1 && args[0] == "--system")
+            return SystemHttpTests.RunAll();
+
         if (args.Length != 0)
         {
-            Console.Error.WriteLine("Usage: CivicConnectMvc.Tests [--postgres]");
+            Console.Error.WriteLine("Usage: CivicConnectMvc.Tests [--postgres|--system]");
             return 2;
         }
 
         var tests = new (string Name, Action Test)[]
         {
+            (nameof(ApiHttpTests.Invalid_Create_Returns_ValidationProblem), ApiHttpTests.Invalid_Create_Returns_ValidationProblem),
             (nameof(ServiceRequestTests.Ef_Model_Maps_M2_PostgreSql_Schema), ServiceRequestTests.Ef_Model_Maps_M2_PostgreSql_Schema),
             (nameof(ServiceRequestTests.New_Request_Starts_As_Submitted), ServiceRequestTests.New_Request_Starts_As_Submitted),
             (nameof(ServiceRequestTests.Valid_Status_Transition_Is_Allowed), ServiceRequestTests.Valid_Status_Transition_Is_Allowed),

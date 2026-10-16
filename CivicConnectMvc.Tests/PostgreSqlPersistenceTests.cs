@@ -1,5 +1,8 @@
 using System.Data.Common;
+using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text.Json;
 using CivicConnectMvc.Data;
 using CivicConnectMvc.Infrastructure.Repositories;
 using CivicConnectMvc.Interfaces;
@@ -37,7 +40,11 @@ internal static class PostgreSqlPersistenceTests
             (nameof(Status_And_History_Save_Atomically), Status_And_History_Save_Atomically),
             (nameof(Transaction_Rollback_Removes_Test_Data), Transaction_Rollback_Removes_Test_Data),
             (nameof(Optimistic_Concurrency_Rejects_Stale_Write), Optimistic_Concurrency_Rejects_Stale_Write),
-            (nameof(Resolution_Is_Persisted), Resolution_Is_Persisted)
+            (nameof(Resolution_Is_Persisted), Resolution_Is_Persisted),
+            (nameof(Http_Create_With_Unknown_Category_Returns_BadRequest_Without_Persisting), Http_Create_With_Unknown_Category_Returns_BadRequest_Without_Persisting),
+            (nameof(Http_Create_And_Get_Persists_Request), Http_Create_And_Get_Persists_Request),
+            (nameof(Http_Assign_Persists_Assignment_And_Audit), Http_Assign_Persists_Assignment_And_Audit),
+            (nameof(Http_Advance_Workflow_Persists_History_And_Resolution), Http_Advance_Workflow_Persists_History_And_Resolution)
         };
 
         var passed = 0;
@@ -61,6 +68,49 @@ internal static class PostgreSqlPersistenceTests
         Console.WriteLine();
         Console.WriteLine($"{passed}/{tests.Length} PostgreSQL integration tests passed.");
         return passed == tests.Length ? 0 : 1;
+    }
+
+    private static void Http_Create_With_Unknown_Category_Returns_BadRequest_Without_Persisting()
+    {
+        using var fixture = DatabaseBackedApiTestFixture.Create();
+        fixture.SeedCreateRequestPrerequisites();
+
+        using var verificationContext = fixture.CreateEnlistedContext();
+        var missingCategoryId = FindUnusedId(
+            verificationContext.Categories
+                .AsNoTracking()
+                .Select(category => category.CategoryId)
+                .ToHashSet());
+        var relatedRecordCountsBefore = (
+            Requests: verificationContext.ServiceRequests.Count(),
+            Assignments: verificationContext.Assignments.Count(),
+            StatusHistories: verificationContext.StatusHistories.Count(),
+            RequestActions: verificationContext.RequestActions.Count(),
+            Resolutions: verificationContext.Resolutions.Count());
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/servicerequests")
+        {
+            Content = JsonContent.Create(new
+            {
+                title = "Request with an unknown category",
+                description = "This valid request references a category that does not exist.",
+                categoryId = missingCategoryId
+            })
+        };
+        using var response = fixture.Send(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var errorDocument = JsonDocument.Parse(
+            response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        Assert.Equal("Category was not found.", errorDocument.RootElement.GetProperty("error").GetString());
+
+        var relatedRecordCountsAfter = (
+            Requests: verificationContext.ServiceRequests.Count(),
+            Assignments: verificationContext.Assignments.Count(),
+            StatusHistories: verificationContext.StatusHistories.Count(),
+            RequestActions: verificationContext.RequestActions.Count(),
+            Resolutions: verificationContext.Resolutions.Count());
+        Assert.Equal(relatedRecordCountsBefore, relatedRecordCountsAfter);
     }
 
     private static void Request_Creation_And_Retrieval_Persist()
@@ -279,6 +329,276 @@ internal static class PostgreSqlPersistenceTests
         Assert.Equal(3, loaded.StatusHistories.Count);
     }
 
+    private static void Http_Create_And_Get_Persists_Request()
+    {
+        using var fixture = DatabaseBackedApiTestFixture.Create();
+        var prerequisites = fixture.SeedCreateRequestPrerequisites();
+        var title = $"HTTP integration request {Guid.NewGuid():N}";
+        var description = $"Created and retrieved through HTTP ({Guid.NewGuid():N}).";
+
+        using var categoryContext = fixture.CreateEnlistedContext();
+        var categoryName = categoryContext.Categories
+            .Where(category => category.CategoryId == prerequisites.CategoryId)
+            .Select(category => category.Name)
+            .Single();
+
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/servicerequests")
+        {
+            Content = JsonContent.Create(new
+            {
+                title,
+                description,
+                categoryId = prerequisites.CategoryId
+            })
+        };
+        using var createResponse = fixture.Send(createRequest);
+
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        Assert.NotNull(createResponse.Headers.Location);
+
+        using var createdDocument = JsonDocument.Parse(
+            createResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var createdRoot = createdDocument.RootElement;
+        var requestId = createdRoot.GetProperty("requestId").GetInt32();
+        Assert.Equal(title, createdRoot.GetProperty("title").GetString());
+        Assert.Equal(description, createdRoot.GetProperty("description").GetString());
+        Assert.Equal(prerequisites.CategoryId, createdRoot.GetProperty("categoryId").GetInt32());
+        Assert.Equal(nameof(RequestStatus.Submitted), createdRoot.GetProperty("currentStatusText").GetString());
+
+        var location = createResponse.Headers.Location!;
+        var locationPath = location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
+        Assert.Equal($"/api/servicerequests/{requestId}", locationPath);
+
+        using var getRequest = new HttpRequestMessage(HttpMethod.Get, location);
+        using var getResponse = fixture.Send(getRequest);
+        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+
+        using var retrievedDocument = JsonDocument.Parse(
+            getResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var retrievedRoot = retrievedDocument.RootElement;
+        Assert.Equal(requestId, retrievedRoot.GetProperty("requestId").GetInt32());
+        Assert.Equal(title, retrievedRoot.GetProperty("title").GetString());
+        Assert.Equal(description, retrievedRoot.GetProperty("description").GetString());
+        Assert.Equal(prerequisites.CategoryId, retrievedRoot.GetProperty("categoryId").GetInt32());
+        Assert.Equal(categoryName, retrievedRoot.GetProperty("category").GetProperty("name").GetString());
+        Assert.Equal(nameof(RequestStatus.Submitted), retrievedRoot.GetProperty("currentStatusText").GetString());
+
+        using var verificationContext = fixture.CreateEnlistedContext();
+        var persisted = verificationContext.ServiceRequests
+            .AsNoTracking()
+            .Include(request => request.Category)
+            .Include(request => request.RequestActions)
+            .SingleOrDefault(request => request.RequestId == requestId);
+
+        Assert.NotNull(persisted);
+        Assert.Equal(title, persisted!.Title);
+        Assert.Equal(description, persisted.Description);
+        Assert.Equal(prerequisites.CategoryId, persisted.CategoryId);
+        Assert.Equal(categoryName, persisted.Category!.Name);
+        Assert.Equal(nameof(RequestStatus.Submitted), persisted.CurrentStatusText);
+        Assert.Equal(1, persisted.RequestActions.Count);
+        var initialAction = persisted.RequestActions.Single();
+        Assert.Equal(prerequisites.RequesterId, initialAction.UserId);
+        Assert.Equal("Service request submitted", initialAction.Details);
+    }
+
+    private static void Http_Assign_Persists_Assignment_And_Audit()
+    {
+        using var fixture = DatabaseBackedApiTestFixture.Create();
+        var prerequisites = fixture.SeedCreateRequestPrerequisites();
+        var staff = fixture.SeedStaffUser();
+
+        var title = $"HTTP assignment request {Guid.NewGuid():N}";
+        var description = $"Created for assignment through HTTP ({Guid.NewGuid():N}).";
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/servicerequests")
+        {
+            Content = JsonContent.Create(new
+            {
+                title,
+                description,
+                categoryId = prerequisites.CategoryId
+            })
+        };
+        using var createResponse = fixture.Send(createRequest);
+
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        using var createdDocument = JsonDocument.Parse(
+            createResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var requestId = createdDocument.RootElement.GetProperty("requestId").GetInt32();
+
+        using var assignRequest = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/servicerequests/{requestId}/assign/{staff.UserId}");
+        using var assignResponse = fixture.Send(assignRequest);
+        Assert.Equal(HttpStatusCode.NoContent, assignResponse.StatusCode);
+
+        using var verificationContext = fixture.CreateEnlistedContext();
+        var persisted = verificationContext.ServiceRequests
+            .AsNoTracking()
+            .Include(request => request.Assignments)
+            .Include(request => request.StatusHistories)
+            .Include(request => request.RequestActions)
+            .SingleOrDefault(request => request.RequestId == requestId);
+
+        Assert.NotNull(persisted);
+        Assert.Equal(nameof(RequestStatus.Assigned), persisted!.CurrentStatusText);
+        Assert.Equal(2, persisted.Version);
+
+        var activeAssignments = persisted.Assignments
+            .Where(assignment => assignment.Active)
+            .ToList();
+        Assert.Equal(1, activeAssignments.Count);
+        Assert.Equal(staff.UserId, activeAssignments.Single().StaffId);
+        Assert.Equal(requestId, activeAssignments.Single().RequestId);
+
+        var assignmentHistory = persisted.StatusHistories
+            .Single(history =>
+                history.PreviousStatus == nameof(RequestStatus.Submitted) &&
+                history.NewStatus == nameof(RequestStatus.Assigned));
+        Assert.Equal(staff.UserId, assignmentHistory.ChangedBy);
+
+        var assignmentAction = persisted.RequestActions
+            .Single(action => action.Details == $"Request assigned to {staff.Name}");
+        Assert.Equal(staff.UserId, assignmentAction.UserId);
+        Assert.Equal(requestId, assignmentAction.RequestId);
+    }
+
+    private static void Http_Advance_Workflow_Persists_History_And_Resolution()
+    {
+        using var fixture = DatabaseBackedApiTestFixture.Create();
+        var prerequisites = fixture.SeedCreateRequestPrerequisites();
+        var staff = fixture.SeedStaffUser();
+
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/servicerequests")
+        {
+            Content = JsonContent.Create(new
+            {
+                title = $"HTTP workflow request {Guid.NewGuid():N}",
+                description = $"Created for HTTP status workflow ({Guid.NewGuid():N}).",
+                categoryId = prerequisites.CategoryId
+            })
+        };
+        using var createResponse = fixture.Send(createRequest);
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+
+        using var createdDocument = JsonDocument.Parse(
+            createResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+        var requestId = createdDocument.RootElement.GetProperty("requestId").GetInt32();
+
+        using (var assignRequest = new HttpRequestMessage(
+                   HttpMethod.Post,
+                   $"/api/servicerequests/{requestId}/assign/{staff.UserId}"))
+        using (var assignResponse = fixture.Send(assignRequest))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, assignResponse.StatusCode);
+        }
+        AssertWorkflowState(fixture, requestId, nameof(RequestStatus.Assigned), expectedVersion: 2, expectedResolutionCount: 0);
+
+        var transitions = new[]
+        {
+            (Previous: RequestStatus.Assigned, Next: RequestStatus.InProgress, Version: 3, ResolutionCount: 0),
+            (Previous: RequestStatus.InProgress, Next: RequestStatus.Resolved, Version: 4, ResolutionCount: 1),
+            (Previous: RequestStatus.Resolved, Next: RequestStatus.Closed, Version: 5, ResolutionCount: 1)
+        };
+
+        foreach (var transition in transitions)
+        {
+            using var advanceRequest = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/servicerequests/{requestId}/advance");
+            using var advanceResponse = fixture.Send(advanceRequest);
+            Assert.Equal(HttpStatusCode.NoContent, advanceResponse.StatusCode);
+
+            AssertWorkflowState(
+                fixture,
+                requestId,
+                transition.Next.ToString(),
+                transition.Version,
+                transition.ResolutionCount);
+        }
+
+        using var verificationContext = fixture.CreateEnlistedContext();
+        var persisted = verificationContext.ServiceRequests
+            .AsNoTracking()
+            .Include(request => request.Assignments)
+            .Include(request => request.StatusHistories)
+            .Include(request => request.RequestActions)
+            .Include(request => request.Resolution)
+            .SingleOrDefault(request => request.RequestId == requestId);
+
+        Assert.NotNull(persisted);
+        Assert.Equal(nameof(RequestStatus.Closed), persisted!.CurrentStatusText);
+        Assert.Equal(5, persisted.Version);
+
+        var activeAssignments = persisted.Assignments
+            .Where(assignment => assignment.Active)
+            .ToList();
+        Assert.Equal(1, activeAssignments.Count);
+        Assert.Equal(staff.UserId, activeAssignments.Single().StaffId);
+
+        var expectedHistory = new[]
+        {
+            (Previous: nameof(RequestStatus.Submitted), Next: nameof(RequestStatus.Assigned), ActorId: staff.UserId),
+            (Previous: nameof(RequestStatus.Assigned), Next: nameof(RequestStatus.InProgress), ActorId: prerequisites.RequesterId),
+            (Previous: nameof(RequestStatus.InProgress), Next: nameof(RequestStatus.Resolved), ActorId: prerequisites.RequesterId),
+            (Previous: nameof(RequestStatus.Resolved), Next: nameof(RequestStatus.Closed), ActorId: prerequisites.RequesterId)
+        };
+        var actualHistory = persisted.StatusHistories
+            .OrderBy(history => history.StatusHistoryId)
+            .Select(history => (history.PreviousStatus, history.NewStatus, history.ChangedBy))
+            .ToList();
+        Assert.Equal(4, actualHistory.Count);
+        for (var index = 0; index < expectedHistory.Length; index++)
+        {
+            Assert.Equal(expectedHistory[index].Previous, actualHistory[index].PreviousStatus);
+            Assert.Equal(expectedHistory[index].Next, actualHistory[index].NewStatus);
+            Assert.Equal(expectedHistory[index].ActorId, actualHistory[index].ChangedBy);
+        }
+
+        var expectedActions = new[]
+        {
+            (Details: "Service request submitted", ActorId: prerequisites.RequesterId),
+            (Details: $"Request assigned to {staff.Name}", ActorId: staff.UserId),
+            (Details: $"Request status changed to {nameof(RequestStatus.InProgress)}", ActorId: prerequisites.RequesterId),
+            (Details: $"Request status changed to {nameof(RequestStatus.Resolved)}", ActorId: prerequisites.RequesterId),
+            (Details: $"Request status changed to {nameof(RequestStatus.Closed)}", ActorId: prerequisites.RequesterId)
+        };
+        var actualActions = persisted.RequestActions
+            .OrderBy(action => action.ActionId)
+            .Select(action => (action.Details, action.UserId))
+            .ToList();
+        Assert.Equal(expectedActions.Length, actualActions.Count);
+        for (var index = 0; index < expectedActions.Length; index++)
+        {
+            Assert.Equal(expectedActions[index].Details, actualActions[index].Details);
+            Assert.Equal(expectedActions[index].ActorId, actualActions[index].UserId);
+        }
+
+        Assert.NotNull(persisted.Resolution);
+        Assert.Equal(1, verificationContext.Resolutions.Count(resolution => resolution.RequestId == requestId));
+        Assert.Equal(prerequisites.RequesterId, persisted.Resolution!.ResolvedBy);
+        Assert.Equal("Request marked as resolved", persisted.Resolution.Details);
+    }
+
+    private static void AssertWorkflowState(
+        DatabaseBackedApiTestFixture fixture,
+        int requestId,
+        string expectedStatus,
+        int expectedVersion,
+        int expectedResolutionCount)
+    {
+        using var context = fixture.CreateEnlistedContext();
+        var request = context.ServiceRequests
+            .AsNoTracking()
+            .SingleOrDefault(item => item.RequestId == requestId);
+        Assert.NotNull(request);
+        Assert.Equal(expectedStatus, request!.CurrentStatusText);
+        Assert.Equal(expectedVersion, request.Version);
+        Assert.Equal(
+            expectedResolutionCount,
+            context.Resolutions.Count(resolution => resolution.RequestId == requestId));
+    }
+
     internal static RequestService CreateService(CivicConnectDbContext db) =>
         new(new ServiceRequestRepository(db), Array.Empty<IRequestObserver>());
 
@@ -341,16 +661,13 @@ internal static class PostgreSqlPersistenceTests
 
 internal sealed class PostgreSqlTestScope : IDisposable
 {
-    private const string ExpectedDatabase = "civicconnect_m3_test";
     private readonly NpgsqlConnection _connection;
     private readonly DbContextOptions<CivicConnectDbContext> _options;
     private IDbContextTransaction? _transaction;
 
     private PostgreSqlTestScope(string connectionString, DbCommandInterceptor? interceptor)
     {
-        var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!string.Equals(builder.Database, ExpectedDatabase, StringComparison.Ordinal))
-            throw new InvalidOperationException("The integration-test connection must target civicconnect_m3_test.");
+        var builder = PostgreSqlTestConnectionConfiguration.Validate(connectionString);
 
         _connection = new NpgsqlConnection(builder.ConnectionString);
         var optionsBuilder = new DbContextOptionsBuilder<CivicConnectDbContext>()
@@ -374,9 +691,7 @@ internal sealed class PostgreSqlTestScope : IDisposable
         if (string.IsNullOrWhiteSpace(connectionString))
             throw new InvalidOperationException("CIVCONNECT_TEST_CONNECTION_STRING is not set.");
 
-        var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!string.Equals(builder.Database, ExpectedDatabase, StringComparison.Ordinal))
-            throw new InvalidOperationException("The integration-test connection must target civicconnect_m3_test.");
+        _ = PostgreSqlTestConnectionConfiguration.Validate(connectionString);
     }
 
     public static PostgreSqlTestScope Begin(DbCommandInterceptor? interceptor = null)
